@@ -10,7 +10,7 @@ import java.io.IOException;
 public class FfmpegUtil {
 
     public static void ts2mp4(String tsPath,String mp4Path){
-        String cmdTemplate = "ffmpeg -i %s -threads 2 -vcodec copy -f mp4 %s";
+        String cmdTemplate = "ffmpeg -i %s -threads 2 -c copy %s";
 
         String cmd = String.format(cmdTemplate,tsPath,mp4Path);
 

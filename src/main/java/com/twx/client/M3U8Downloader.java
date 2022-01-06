@@ -32,7 +32,14 @@ import static com.twx.utils.MyFileUtil.*;
  * 本工具使用的转换命令见 ffmpeg -i %s -threads 2 -vcodec copy -f mp4 %s
  */
 public class M3U8Downloader {
+    
+    private static final Integer THREAD_TASK = 50;
 
+    private String M3U8_FORMAT="ts";
+
+    private Boolean M4S=false;
+
+    private String initExtUrl;
 
     private String m3u8_origin_url;
 
@@ -50,6 +57,12 @@ public class M3U8Downloader {
         this.m3u8_origin_url = m3u8_origin_url;
         this.download_dir = download_dir;
         this.output_mp4_name = output_mp4_name;
+    }
+
+    public void enableM4s(String initExtUrl) {
+        this.initExtUrl=initExtUrl;
+        this.M4S=true;
+        this.M3U8_FORMAT = "m4s";
     }
 
     /**
@@ -70,6 +83,7 @@ public class M3U8Downloader {
      * </pre>
      * @param json 任务列表--json格式
      */
+    @Deprecated
     public static void multiTask(String json) {
         List<DownloaderParam> downloaderParamList = JSONObject.parseArray(json, DownloaderParam.class);
 
@@ -90,12 +104,16 @@ public class M3U8Downloader {
         //计算需要多少个线程执行
         int total = m3u8.size();
         int threadNum=0;
-        if (total % 50 == 0) {
-            threadNum = total/50;
+        if (total % THREAD_TASK == 0) {
+            threadNum = total/THREAD_TASK;
         }else{
-            threadNum = total/50+1;
+            threadNum = total/THREAD_TASK+1;
         }
         CountDownLatch latch = new CountDownLatch(threadNum);
+
+        if (M4S) {
+            download(initExtUrl,new File(download_dir+"/"+"init.mp4"),false);
+        }
 
         multiDownload(m3u8,latch);
 
@@ -108,15 +126,21 @@ public class M3U8Downloader {
         }
 
         //下载完成后合并文件
-        String tsName = download_dir+"/merge.ts";
+        String tsName = download_dir+"/merge.mm";
         unionTmp2Ts(tsName);
 
         //ffmpeg转码
         FfmpegUtil.ts2mp4(tsName,download_dir+"/"+output_mp4_name);
 
         //清理资源
-        MyFileUtil.deleteSuffix(new File(download_dir),"tmp");
-        MyFileUtil.deleteSuffix(new File(download_dir),"ts");
+//        MyFileUtil.deleteSuffix(new File(download_dir),"tmp");
+//        MyFileUtil.deleteSuffix(new File(download_dir),"ts");
+
+        MyFileUtil.deleteSuffix(new File(download_dir),M3U8_FORMAT);
+        MyFileUtil.deleteSuffix(new File(download_dir),"mm");
+        if (M4S) {
+            FileUtils.deleteQuietly(new File(download_dir+"/"+"init.mp4"));
+        }
 
         System.out.println("下载完成！！！");
 
@@ -139,9 +163,13 @@ public class M3U8Downloader {
             //下载m3u8文件到临时文件夹
             download(url,tmpFile,false);
             //过滤得到以ts结尾到行
+//            res = FileUtils.readLines(tmpFile, "utf-8")
+//                    .stream()
+//                    .filter(line -> !line.startsWith("#")&&line.endsWith(".ts"))
+//                    .collect(Collectors.toList());
             res = FileUtils.readLines(tmpFile, "utf-8")
                     .stream()
-                    .filter(line -> !line.startsWith("#")&&line.endsWith(".ts"))
+                    .filter(line -> !line.startsWith("#")&&line.endsWith(M3U8_FORMAT))
                     .collect(Collectors.toList());
         } catch (IOException e) {
             e.printStackTrace();
@@ -159,9 +187,9 @@ public class M3U8Downloader {
 
         int total = m3u8.size();
 
-        int threadNum=total/50;
+        int threadNum=total/THREAD_TASK;
 
-        int yushu = total%50;
+        int yushu = total%THREAD_TASK;
 
         for (int i = 0; i < threadNum; i++) {
 
@@ -170,8 +198,8 @@ public class M3U8Downloader {
             new Thread(() ->
             {
                 //当前线程下载m3u8文件哪个片段
-                List<String> segTs = m3u8.subList(50*temp,50*(temp+1)-1);
-                downloadIterator(segTs,download_dir+"/thread"+temp+".tmp");
+                List<String> segTs = m3u8.subList(THREAD_TASK*temp,THREAD_TASK*(temp+1)-1);
+                download(segTs);
 
                 System.out.println(Thread.currentThread().getName()+" 完成下载。。。");
                 latch.countDown();
@@ -183,8 +211,8 @@ public class M3U8Downloader {
             new Thread(
                     () -> {
                         //当前线程下载m3u8文件哪个片段
-                        List<String> segTs = m3u8.subList(50*threadNum,total);
-                        downloadIterator(segTs,download_dir+"/thread"+(threadNum)+".tmp");
+                        List<String> segTs = m3u8.subList(THREAD_TASK*threadNum,total);
+                        download(segTs);
 
                         System.out.println(Thread.currentThread().getName()+" 完成下载。。。");
                         latch.countDown();
@@ -195,12 +223,11 @@ public class M3U8Downloader {
 
 
     /**
-     * 循环下载输出文件fileName
-     * @param fileName
+     * 下载文件列表
      * @param m3u8Ts
      * @throws IOException
      */
-    private void downloadIterator(List<String> m3u8Ts,String fileName){
+    private void download(List<String> m3u8Ts){
 
         for (String ts:m3u8Ts) {
 
@@ -212,9 +239,11 @@ public class M3U8Downloader {
             String M3U8_BASE_URL = m3u8_origin_url.substring(0,m3u8_origin_url.lastIndexOf("/")+1);
             String targetUrl = M3U8_BASE_URL+ts;
 
-            System.out.println(Thread.currentThread().getName()+"->>正在下载："+targetUrl);
-
-            download(targetUrl,new File(fileName),true);
+            File saveFile = new File(download_dir + "/" + ts);
+            if (!saveFile.exists()){
+                System.out.println(Thread.currentThread().getName()+"->>正在下载："+ts);
+                download(targetUrl,saveFile,false);
+            }
         }
     }
 
@@ -254,24 +283,31 @@ public class M3U8Downloader {
      * @param targetTs
      * @throws IOException
      */
-    private void unionTmp2Ts(String targetTs){
+    public void unionTmp2Ts(String targetTs){
 
         File dir = new File(download_dir);
         File[] files = dir.listFiles();
 
         //通过线程名称排序
         List<File> sortedFiles = MyFileUtil.sortFileByName(Arrays.asList(files), "asc");
-
+        System.out.println("排好序的文件=>"+sortedFiles);
+        System.out.println("排好序的文件个数=>"+sortedFiles.size());
         //过滤得到.tmp结尾的文件列表
         Vector<InputStream> vector = new Vector<>();
 
         try {
             for (File file : sortedFiles) {
                 String extension = FilenameUtils.getExtension(file.getName());
-                if ("tmp".equalsIgnoreCase(extension)) {
+                if (M3U8_FORMAT.equalsIgnoreCase(extension)) {
                     vector.add(new FileInputStream(file));
                 }
+                if (M4S) {
+                    if ("mp4".equals(extension)) {
+                        vector.add(new FileInputStream(file));
+                    }
+                }
             }
+            System.out.println("vector 大小=>"+vector.size());
             unioFile(vector,targetTs);
         } catch (IOException e) {
             e.printStackTrace();
